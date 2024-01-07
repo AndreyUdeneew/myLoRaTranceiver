@@ -1,5 +1,21 @@
 #include <SPI.h>
 #include <LoRa.h>
+#include "BluetoothSerial.h"
+
+//#define USE_PIN // Uncomment this to use PIN during pairing. The pin is specified on the line below
+const char *pin = "1234";  // Change this to more secure PIN.
+
+String device_name = "LoRa_Tranceiver";
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
+#endif
+
+BluetoothSerial SerialBT;
 
 #define HSPI_MISO MISO
 #define HSPI_MOSI MOSI
@@ -16,7 +32,7 @@ static const int spiClk = 1000000;  // 1 MHz
 //uninitalised pointers to SPI objects
 SPIClass *hspi = NULL;
 
-int count;
+int count, counter;
 //define the pins used by the transceiver module
 #define ss 15
 #define rst 2
@@ -24,13 +40,20 @@ int count;
 
 String outgoing;           // outgoing message
 byte msgCount = 0;         // count of outgoing messages
-byte localAddress = 0xBB;  // address of this device
-byte destination = 0xFF;   // destination to send to
+byte localAddress = 0xAA;  // address of this device
+byte destination = 0xBB;   // destination to send to
 long lastSendTime = 0;     // last send time
 int interval = 2000;       // interval between sends
 
 void setup() {
 
+  SerialBT.begin(device_name);  //Bluetooth device name
+  Serial.printf("The device with name \"%s\" is started.\nNow you can pair it with Bluetooth!\n", device_name.c_str());
+//Serial.printf("The device with name \"%s\" and MAC address %s is started.\nNow you can pair it with Bluetooth!\n", device_name.c_str(), SerialBT.getMacString()); // Use this after the MAC method is implemented
+#ifdef USE_PIN
+  SerialBT.setPin(pin);
+  Serial.println("Using PIN");
+#endif
   //initialise two instances of the SPIClass attached to VSPI and HSPI respectively
   hspi = new SPIClass(HSPI);
   //initialise hspi with default pins
@@ -52,9 +75,9 @@ void setup() {
   // The sync word assures you don't get LoRa messages from other LoRa transceivers
   // ranges from 0-0xFF
   // LoRa.setSyncWord(0xF3);
-  Serial.println("LoRa Initializing OK!");
+  // Serial.println("LoRa Initializing OK!");
 
-  LoRa.onReceive(onReceive);
+  // LoRa.onReceive(onReceive);
   LoRa.receive();
   Serial.println("LoRa init succeeded.");
 }
@@ -105,15 +128,62 @@ void onReceive(int packetSize) {
   Serial.println("RSSI: " + String(LoRa.packetRssi()));
   Serial.println("Snr: " + String(LoRa.packetSnr()));
   Serial.println();
+  SerialBT.print(incoming);
 }
 
 void loop() {
-  if (millis() - lastSendTime > interval) {
-    String message = "HeLoRa World!";   // send a message
-    sendMessage(message);
-    Serial.println("Sending " + message);
-    lastSendTime = millis();            // timestamp the message
-    interval = random(2000) + 1000;     // 2-3 seconds
-    LoRa.receive();                     // go back into receive mode
+  // LoRa.receive();
+  String FromLoRa_2_BT = "";
+
+  int packetSize = LoRa.parsePacket();
+  if (packetSize) {
+    // received a packet
+    Serial.print("Received packet ");
+
+    // read packet
+    while (LoRa.available()) {
+      FromLoRa_2_BT += (char)LoRa.read();
+      // SerialBT.print(LoRa.read());
+    }
+    
+    Serial.print("Received packet ");
+    Serial.print(FromLoRa_2_BT);
+    // SerialBT.print("some shit");
+    for (int i = 0; i<FromLoRa_2_BT.length(); i++)
+    {
+      SerialBT.write(FromLoRa_2_BT[i]);
+    }
+    // SerialBT.write(FromLoRa_2_BT);
+    // print RSSI of packet
+    Serial.print("' with RSSI ");
+    Serial.println(LoRa.packetRssi());
   }
+
+  String FromBT_2_LoRa = "";
+
+  if (SerialBT.available()) {
+    while (SerialBT.available()) {
+      FromBT_2_LoRa += (char)SerialBT.read();
+      // if (SerialBT.read() == 10);
+    }
+    Serial.println("Received via Bluetooth:");
+    Serial.println(FromBT_2_LoRa);
+    LoRa.beginPacket();
+    LoRa.print(FromBT_2_LoRa);
+    LoRa.print(counter);
+    LoRa.endPacket();
+    // delay(1000);
+    counter++;
+  }
+
+  // String message = "";
+  // if (SerialBT.available()) {
+  //   message = (SerialBT.read());
+  // }
+  // sendMessage(message);
+  // // delay(1000);
+  // Serial.println("Sending " + message);
+  // //
+  // LoRa.receive();  // go back into receive mode
+  // delay(1000);
 }
